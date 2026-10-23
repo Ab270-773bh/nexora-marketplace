@@ -2,10 +2,12 @@
 import { useEffect, useState } from 'react';
 import {
   Search, ShoppingBag, Store, Truck, Headphones,
-  UserRound, Menu, ArrowLeft, ShieldCheck, Globe2,
-  Package, LogIn, UserPlus, X
+  UserRound, ArrowLeft, ShieldCheck, Globe2,
+  Package, LogIn, UserPlus, X, KeyRound
 } from 'lucide-react';
 import { supabase } from './supabase.js';
+
+const STORE_URL = 'https://ab270-773bh.github.io/nexora-marketplace/';
 
 const categories = [
   { name: 'الإلكترونيات', icon: '📱' },
@@ -28,27 +30,37 @@ export default function App() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-const [phone, setPhone] = useState('');
-const [busy, setBusy] = useState(false);
-const [resetSent, setResetSent] = useState(false);
+  const [phone, setPhone] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     loadProducts();
 
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (error) {
+        setNotice('تعذر التحقق من جلسة الحساب.');
+        return;
+      }
       setSession(data.session);
     });
 
-    const { data } = supabase.auth.onAuthStateChange(
-      (_event, nextSession) => setSession(nextSession)
-    );
+    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      setSession(nextSession);
+
+      if (event === 'PASSWORD_RECOVERY') {
+        setAuthMode('recovery');
+        setAuthOpen(true);
+        setPassword('');
+        setNotice('أدخل كلمة المرور الجديدة لحسابك.');
+      }
+    });
 
     return () => data.subscription.unsubscribe();
   }, []);
 
   async function loadProducts() {
     setLoading(true);
+
     const { data, error } = await supabase
       .from('products')
       .select('id,name,description,price_usd,image_url,stock,seller_id')
@@ -60,7 +72,15 @@ const [resetSent, setResetSent] = useState(false);
     } else {
       setProducts(data || []);
     }
+
     setLoading(false);
+  }
+
+  function openAuth(mode = 'login') {
+    setAuthMode(mode);
+    setPassword('');
+    setNotice('');
+    setAuthOpen(true);
   }
 
   async function handleAuth(event) {
@@ -69,25 +89,64 @@ const [resetSent, setResetSent] = useState(false);
     setNotice('');
 
     try {
-      if (authMode === 'register') {
-        const { error } = await supabase.auth.signUp({
-          email,
+      if (authMode === 'forgot') {
+        const { error } = await supabase.auth.resetPasswordForEmail(
+          email.trim(),
+          { redirectTo: STORE_URL }
+        );
+
+        if (error) throw error;
+
+        setAuthOpen(false);
+        setPassword('');
+        setNotice(
+          'إذا كان البريد مسجلاً، فستصلك رسالة استعادة. افحص البريد الوارد والرسائل غير المرغوب فيها.'
+        );
+      } else if (authMode === 'recovery') {
+        const { error } = await supabase.auth.updateUser({ password });
+
+        if (error) throw error;
+
+        setPassword('');
+        setAuthMode('login');
+        setAuthOpen(false);
+        setNotice('تم تغيير كلمة المرور بنجاح.');
+      } else if (authMode === 'register') {
+        const { data, error } = await supabase.auth.signUp({
+          email: email.trim(),
           password,
           options: {
-            data: { full_name: fullName }
+            emailRedirectTo: STORE_URL,
+            data: {
+              full_name: fullName.trim(),
+              phone: phone.trim()
+            }
           }
         });
+
         if (error) throw error;
-        setNotice('تم إرسال طلب التسجيل. تحقق من بريدك الإلكتروني لتأكيد الحساب إذا طُلب منك ذلك.');
+
+        setPassword('');
         setAuthOpen(false);
+
+        if (data.session) {
+          setNotice('تم إنشاء الحساب بنجاح.');
+        } else {
+          setNotice(
+            'تم إرسال طلب التسجيل. افحص بريدك الإلكتروني واضغط رابط التأكيد قبل تسجيل الدخول.'
+          );
+        }
       } else {
         const { error } = await supabase.auth.signInWithPassword({
-          email,
+          email: email.trim(),
           password
         });
+
         if (error) throw error;
-        setNotice('تم تسجيل الدخول بنجاح.');
+
+        setPassword('');
         setAuthOpen(false);
+        setNotice('تم تسجيل الدخول بنجاح.');
       }
     } catch (error) {
       setNotice(error.message || 'تعذر إكمال العملية.');
@@ -98,16 +157,23 @@ const [resetSent, setResetSent] = useState(false);
 
   async function signOut() {
     const { error } = await supabase.auth.signOut();
-    setNotice(error ? error.message : 'تم تسجيل الخروج.');
+
+    if (error) {
+      setNotice(error.message || 'تعذر تسجيل الخروج.');
+    } else {
+      setNotice('تم تسجيل الخروج.');
+    }
   }
 
-  const visibleProducts = products.filter((p) => {
+  const visibleProducts = products.filter((product) => {
+    const term = search.toLowerCase();
+
     const matchesSearch =
-      (p.name || '').toLowerCase().includes(search.toLowerCase()) ||
-      (p.description || '').toLowerCase().includes(search.toLowerCase());
+      (product.name || '').toLowerCase().includes(term) ||
+      (product.description || '').toLowerCase().includes(term);
 
     const matchesCategory =
-      category === 'الكل' || p.category === category;
+      category === 'الكل' || product.category === category;
 
     return matchesSearch && matchesCategory;
   });
@@ -130,22 +196,24 @@ const [resetSent, setResetSent] = useState(false);
 
         <div className="header-actions">
           {session ? (
-            <button className="icon-button" onClick={signOut} title="تسجيل الخروج">
+            <button
+              className="icon-button"
+              onClick={signOut}
+              title="تسجيل الخروج"
+            >
               <UserRound size={20} />
               <span>خروج</span>
             </button>
           ) : (
             <button
               className="icon-button"
-              onClick={() => {
-                setAuthMode('login');
-                setAuthOpen(true);
-              }}
+              onClick={() => openAuth('login')}
             >
               <LogIn size={19} />
               <span>دخول</span>
             </button>
           )}
+
           <a href="#products" className="bag-button">
             <ShoppingBag size={19} />
             <span>تسوّق</span>
@@ -159,18 +227,22 @@ const [resetSent, setResetSent] = useState(false);
             <span className="eyebrow">
               <span className="live-dot" /> عالم جديد للتسوّق
             </span>
+
             <h1>
               كل ما تبحث عنه،
               <br />
               <span>في مكان واحد.</span>
             </h1>
+
             <p>
               اكتشف منتجات متنوعة، وتسوّق من متاجر مستقلة،
               مع تجربة بسيطة وواضحة.
             </p>
+
             <a className="primary-button" href="#products">
               اكتشف المنتجات <ArrowLeft size={18} />
             </a>
+
             <div className="hero-trust">
               <span><ShieldCheck size={16} /> بائعون تتم مراجعتهم</span>
               <span><Globe2 size={16} /> سوريا أولًا</span>
@@ -202,6 +274,7 @@ const [resetSent, setResetSent] = useState(false);
               <h2>الأقسام</h2>
             </div>
           </div>
+
           <div className="category-grid">
             <button
               className={`category-card ${category === 'الكل' ? 'selected' : ''}`}
@@ -209,13 +282,15 @@ const [resetSent, setResetSent] = useState(false);
             >
               <span>✦</span><strong>كل المنتجات</strong>
             </button>
+
             {categories.map((item) => (
               <button
                 className={`category-card ${category === item.name ? 'selected' : ''}`}
                 key={item.name}
                 onClick={() => setCategory(item.name)}
               >
-                <span>{item.icon}</span><strong>{item.name}</strong>
+                <span>{item.icon}</span>
+                <strong>{item.name}</strong>
               </button>
             ))}
           </div>
@@ -228,11 +303,12 @@ const [resetSent, setResetSent] = useState(false);
               <h2>اكتشف المنتجات</h2>
               <p>الأسعار معروضة بالدولار الأمريكي.</p>
             </div>
+
             <div className="search-box">
               <Search size={19} />
               <input
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(event) => setSearch(event.target.value)}
                 placeholder="ابحث عن منتج..."
                 aria-label="البحث عن منتج"
               />
@@ -259,20 +335,30 @@ const [resetSent, setResetSent] = useState(false);
                 <article className="product-card" key={product.id}>
                   <div className="product-image">
                     {product.image_url ? (
-                      <img src={product.image_url} alt={product.name} loading="lazy" />
+                      <img
+                        src={product.image_url}
+                        alt={product.name}
+                        loading="lazy"
+                      />
                     ) : (
-                      <div className="product-placeholder"><Package size={42} /></div>
+                      <div className="product-placeholder">
+                        <Package size={42} />
+                      </div>
                     )}
                     <span className="product-label">من متجر مستقل</span>
                   </div>
+
                   <div className="product-info">
                     <h3>{product.name}</h3>
                     <p>{product.description || 'تفاصيل المنتج متاحة عند الاستفسار.'}</p>
+
                     <div className="product-bottom">
                       <strong>${Number(product.price_usd).toFixed(2)}</strong>
                       <button
                         className="outline-button"
-                        onClick={() => setNotice('الشراء والدفع غير مفعّلين بعد. تواصل مع الإدارة قبل أي تحويل مالي.')}
+                        onClick={() => setNotice(
+                          'الشراء والدفع غير مفعّلين بعد. لا تحوّل أي أموال قبل تفعيل نظام دفع موثوق.'
+                        )}
                       >
                         التفاصيل
                       </button>
@@ -293,7 +379,9 @@ const [resetSent, setResetSent] = useState(false);
           </div>
           <button
             className="primary-button"
-            onClick={() => setNotice('للتقديم كبائع، تواصل مع إدارة NEXORA عبر قناة الدعم الرسمية عند إطلاقها. لا تدفع رسوم انضمام غير معلنة.')}
+            onClick={() => setNotice(
+              'خدمة طلبات البائعين لم تُفعّل بعد. لا تدفع رسوم انضمام غير معلنة.'
+            )}
           >
             طلب الانضمام <ArrowLeft size={18} />
           </button>
@@ -338,66 +426,169 @@ const [resetSent, setResetSent] = useState(false);
       {notice && (
         <div className="notice" role="status">
           <span>{notice}</span>
-          <button onClick={() => setNotice('')} aria-label="إغلاق"><X size={18} /></button>
+          <button onClick={() => setNotice('')} aria-label="إغلاق">
+            <X size={18} />
+          </button>
         </div>
       )}
 
       {authOpen && (
-        <div className="modal-backdrop" onClick={() => setAuthOpen(false)}>
-          <section className="auth-modal" onClick={(e) => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setAuthOpen(false)} aria-label="إغلاق">
+        <div
+          className="modal-backdrop"
+          onClick={() => setAuthOpen(false)}
+        >
+          <section
+            className="auth-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="modal-close"
+              onClick={() => setAuthOpen(false)}
+              aria-label="إغلاق"
+            >
               <X size={21} />
             </button>
-            <div className="auth-logo"><UserRound size={28} /></div>
-            <h2>{authMode === 'login' ? 'أهلًا بعودتك' : 'إنشاء حساب جديد'}</h2>
+
+            <div className="auth-logo">
+              {authMode === 'forgot' || authMode === 'recovery'
+                ? <KeyRound size={28} />
+                : <UserRound size={28} />}
+            </div>
+
+            <h2>
+              {authMode === 'login' && 'أهلًا بعودتك'}
+              {authMode === 'register' && 'إنشاء حساب جديد'}
+              {authMode === 'forgot' && 'استعادة كلمة المرور'}
+              {authMode === 'recovery' && 'تعيين كلمة مرور جديدة'}
+            </h2>
+
             <p>حسابك على NEXORA Marketplace</p>
+
             <form onSubmit={handleAuth}>
               {authMode === 'register' && (
                 <label>
                   الاسم الكامل
                   <input
                     value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
+                    onChange={(event) => setFullName(event.target.value)}
                     required
                     autoComplete="name"
                   />
                 </label>
               )}
-              <label>
-                البريد الإلكتروني
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  autoComplete="email"
-                />
-              </label>
-              <label>
-                كلمة المرور
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  minLength={6}
-                  autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
-                />
-              </label>
-              <button className="primary-button auth-submit" disabled={busy}>
-                {busy ? 'يرجى الانتظار...' : authMode === 'login' ? 'تسجيل الدخول' : 'إنشاء الحساب'}
+
+              {authMode !== 'recovery' && (
+                <label>
+                  البريد الإلكتروني
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    required
+                    autoComplete="email"
+                  />
+                </label>
+              )}
+
+              {authMode === 'register' && (
+                <label>
+                  رقم الهاتف (اختياري)
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(event) => setPhone(event.target.value)}
+                    autoComplete="tel"
+                    placeholder="+963..."
+                  />
+                </label>
+              )}
+
+              {authMode !== 'forgot' && (
+                <label>
+                  {authMode === 'recovery' ? 'كلمة المرور الجديدة' : 'كلمة المرور'}
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    required
+                    minLength={6}
+                    autoComplete={
+                      authMode === 'login'
+                        ? 'current-password'
+                        : 'new-password'
+                    }
+                  />
+                </label>
+              )}
+
+              <button
+                className="primary-button auth-submit"
+                type="submit"
+                disabled={busy}
+              >
+                {busy
+                  ? 'يرجى الانتظار...'
+                  : authMode === 'login'
+                    ? 'تسجيل الدخول'
+                    : authMode === 'register'
+                      ? 'إنشاء الحساب'
+                      : authMode === 'forgot'
+                        ? 'إرسال رابط الاستعادة'
+                        : 'حفظ كلمة المرور الجديدة'}
               </button>
             </form>
-            <button
-              className="auth-switch"
-              onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
-            >
-              {authMode === 'login' ? (
-                <>ليس لديك حساب؟ <strong><UserPlus size={15} /> إنشاء حساب</strong></>
-              ) : (
-                <>لديك حساب؟ <strong>تسجيل الدخول</strong></>
-              )}
-            </button>
+
+            {authMode === 'login' && (
+              <button
+                type="button"
+                className="auth-switch"
+                onClick={() => {
+                  setAuthMode('forgot');
+                  setNotice('');
+                }}
+              >
+                نسيت كلمة المرور؟
+              </button>
+            )}
+
+            {authMode === 'forgot' && (
+              <button
+                type="button"
+                className="auth-switch"
+                onClick={() => setAuthMode('login')}
+              >
+                العودة إلى تسجيل الدخول
+              </button>
+            )}
+
+            {authMode === 'recovery' && (
+              <p>اختر كلمة مرور جديدة لا تقل عن 6 أحرف.</p>
+            )}
+
+            {(authMode === 'login' || authMode === 'register') && (
+              <button
+                type="button"
+                className="auth-switch"
+                onClick={() => {
+                  setPassword('');
+                  setAuthMode(
+                    authMode === 'login' ? 'register' : 'login'
+                  );
+                  setNotice('');
+                }}
+              >
+                {authMode === 'login' ? (
+                  <>
+                    ليس لديك حساب؟{' '}
+                    <strong><UserPlus size={15} /> إنشاء حساب</strong>
+                  </>
+                ) : (
+                  <>
+                    لديك حساب؟ <strong>تسجيل الدخول</strong>
+                  </>
+                )}
+              </button>
+            )}
           </section>
         </div>
       )}

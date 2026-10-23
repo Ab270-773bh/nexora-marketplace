@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from './supabase';
 
@@ -175,7 +174,6 @@ export default function App() {
           return;
         }
 
-        // تأجيل طلبات قاعدة البيانات إلى ما بعد معالجة حدث المصادقة.
         setTimeout(() => {
           loadProfile(newSession.user.id);
           loadMyApplication(newSession.user.id);
@@ -522,8 +520,7 @@ export default function App() {
         .small { font-size:13px; overflow-wrap:anywhere; }
         @media(max-width:520px) { .hero { padding-top:30px; } .panel { padding:15px; } }
       `}</style>
-
-      <header className="topbar">
+            <header className="topbar">
         <div className="wrap topline">
           <div>
             <div className="brand">NEXORA</div>
@@ -1048,4 +1045,4 @@ export default function App() {
       </footer>
     </div>
   );
-}
+                    }

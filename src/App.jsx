@@ -1,203 +1,212 @@
 
-import { useEffect, useState } from 'react';
-import {
-  Search, ShoppingBag, Store, Truck, Headphones,
-  UserRound, ArrowLeft, ShieldCheck, Globe2,
-  Package, LogIn, UserPlus, X, KeyRound,
-  Settings, Plus, Pencil, Trash2, Eye, EyeOff,
-  RefreshCw, ImagePlus, Star, Minus, ChevronLeft,
-  ChevronRight, ShoppingCart, Trash
-} from 'lucide-react';
-import { supabase } from './supabase.js';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { supabase } from './supabase';
 
-const STORE_URL = 'https://ab270-773bh.github.io/nexora-marketplace/';
 const ADMIN_SELLER_ID = 'bb1d7747-5086-4f39-bd91-ec12d56be461';
-const BUCKET = 'product-images';
-const MAX_IMAGES = 6;
-const MAX_FILE_SIZE = 5 * 1024 * 1024;
-
-const categories = [
-  { name: 'الإلكترونيات', icon: '📱' },
-  { name: 'الأزياء', icon: '👕' },
-  { name: 'المنزل', icon: '🏠' },
-  { name: 'الجمال والعناية', icon: '✨' },
-  { name: 'الألعاب', icon: '🎮' },
-  { name: 'منتجات متنوعة', icon: '🛍️' }
-];
 
 const emptyProduct = {
   name: '',
   description: '',
-  usage_instructions: '',
   price_usd: '',
   image_url: '',
-  image_urls: [],
-  stock: '0',
-  is_active: false
+  stock: '10',
+  usage_instructions: '',
 };
-
-const inputStyle = {
-  width: '100%',
-  boxSizing: 'border-box',
-  padding: '12px',
-  borderRadius: '10px',
-  border: '1px solid #d5dbe5',
-  background: '#fff',
-  color: '#172033',
-  font: 'inherit',
-  marginTop: '6px'
-};
-
-const adminButtonStyle = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: '7px',
-  padding: '10px 14px',
-  borderRadius: '10px',
-  border: '1px solid #d5dbe5',
-  background: '#fff',
-  color: '#172033',
-  font: 'inherit',
-  cursor: 'pointer'
-};
-
-function productImages(product) {
-  const extra = Array.isArray(product.image_urls) ? product.image_urls : [];
-  return [...new Set([product.image_url, ...extra].filter(Boolean))];
-}
 
 export default function App() {
-  const [products, setProducts] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('الكل');
   const [session, setSession] = useState(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [adminChecking, setAdminChecking] = useState(true);
-  const [adminOpen, setAdminOpen] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const [products, setProducts] = useState([]);
   const [adminProducts, setAdminProducts] = useState([]);
-  const [adminLoading, setAdminLoading] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [productForm, setProductForm] = useState(emptyProduct);
-  const [productBusy, setProductBusy] = useState(false);
-  const [selectedFiles, setSelectedFiles] = useState([]);
-  const [uploadPreviews, setUploadPreviews] = useState([]);
-  const [notice, setNotice] = useState('');
+  const [applications, setApplications] = useState([]);
+  const [myApplication, setMyApplication] = useState(null);
 
-  const [detailProduct, setDetailProduct] = useState(null);
-  const [detailImageIndex, setDetailImageIndex] = useState(0);
-  const [cart, setCart] = useState([]);
-  const [cartOpen, setCartOpen] = useState(false);
-  const [ratings, setRatings] = useState({});
-  const [myRatings, setMyRatings] = useState({});
-
-  const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
+
+  const [search, setSearch] = useState('');
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    loadProducts();
+  const [sellerForm, setSellerForm] = useState({
+    store_name: '',
+    description: '',
+  });
 
-    supabase.auth.getSession().then(({ data, error }) => {
-      if (error) setNotice('تعذر التحقق من جلسة الحساب.');
-      setSession(data?.session || null);
-    });
+  const [productForm, setProductForm] = useState(emptyProduct);
+  const [editingProductId, setEditingProductId] = useState(null);
 
-    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
-      setSession(nextSession);
-      if (event === 'PASSWORD_RECOVERY') {
-        setAuthMode('recovery');
-        setAuthOpen(true);
-        setPassword('');
-        setNotice('أدخل كلمة المرور الجديدة لحسابك.');
-      }
-    });
+  const user = session?.user;
+  const isAdmin = profile?.role === 'admin';
 
-    return () => data.subscription.unsubscribe();
-  }, []);
+  const money = (value) =>
+    new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(Number(value || 0));
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function checkAdmin() {
-      setIsAdmin(false);
-      setAdminChecking(true);
-
-      if (!session?.user?.id) {
-        setAdminChecking(false);
-        setAdminOpen(false);
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', session.user.id)
-        .maybeSingle();
-
-      if (cancelled) return;
-
-      if (error) {
-        setNotice('تعذر التحقق من صلاحيات الحساب.');
-      } else {
-        const admin = data?.role === 'admin';
-        setIsAdmin(admin);
-        if (admin) loadAdminProducts();
-        else setAdminOpen(false);
-      }
-
-      setAdminChecking(false);
-    }
-
-    checkAdmin();
-    return () => { cancelled = true; };
-  }, [session]);
-
-  useEffect(() => {
-    return () => {
-      uploadPreviews.forEach((url) => URL.revokeObjectURL(url));
-    };
-  }, [uploadPreviews]);
-
-  async function loadProducts() {
-    setLoading(true);
+  const loadProducts = useCallback(async () => {
     const { data, error } = await supabase
       .from('products')
-      .select('id,name,description,usage_instructions,price_usd,image_url,image_urls,stock,seller_id')
+      .select('*')
       .eq('is_active', true)
       .order('created_at', { ascending: false });
 
     if (error) {
-      setNotice('تعذر تحميل المنتجات. إذا ظهر خطأ عن usage_instructions، نفّذ كود SQL الموجود أسفل الملف.');
-    } else {
-      setProducts(data || []);
+      setNotice('تعذّر تحميل المنتجات: ' + error.message);
+      return;
     }
-    setLoading(false);
-  }
 
-  async function loadAdminProducts() {
-    setAdminLoading(true);
+    setProducts(data || []);
+  }, []);
+
+  const loadProfile = useCallback(async (userId) => {
+    if (!userId) {
+      setProfile(null);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error) {
+      setNotice('تعذّر تحميل بيانات الحساب: ' + error.message);
+      return;
+    }
+
+    setProfile(data);
+  }, []);
+
+  const loadAdminProducts = useCallback(async () => {
     const { data, error } = await supabase
       .from('products')
-      .select('id,name,description,usage_instructions,price_usd,image_url,image_urls,stock,is_active,seller_id,created_at')
+      .select('*')
       .order('created_at', { ascending: false });
 
-    if (error) setNotice('تعذر تحميل منتجات الإدارة: ' + error.message);
-    else setAdminProducts(data || []);
-    setAdminLoading(false);
-  }
+    if (error) {
+      setNotice('تعذّر تحميل منتجات الإدارة: ' + error.message);
+      return;
+    }
 
-  function openAuth(mode = 'login') {
-    setAuthMode(mode);
-    setPassword('');
-    setNotice('');
-    setAuthOpen(true);
-  }
+    setAdminProducts(data || []);
+  }, []);
+
+  const loadMyApplication = useCallback(async (userId) => {
+    if (!userId) {
+      setMyApplication(null);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('seller_applications')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error) {
+      setNotice('تعذّر تحميل طلب المتجر: ' + error.message);
+      return;
+    }
+
+    setMyApplication(data);
+    if (data) {
+      setSellerForm({
+        store_name: data.store_name || '',
+        description: data.description || '',
+      });
+    }
+  }, []);
+
+  const loadApplications = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('seller_applications')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      setNotice('تعذّر تحميل طلبات البائعين: ' + error.message);
+      return;
+    }
+
+    setApplications(data || []);
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function initialise() {
+      const { data, error } = await supabase.auth.getSession();
+
+      if (error) {
+        setNotice('تعذّر التحقق من تسجيل الدخول: ' + error.message);
+      }
+
+      if (!alive) return;
+
+      const currentSession = data?.session || null;
+      setSession(currentSession);
+
+      if (currentSession?.user) {
+        await loadProfile(currentSession.user.id);
+        await loadMyApplication(currentSession.user.id);
+      }
+
+      await loadProducts();
+    }
+
+    initialise();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (_event, newSession) => {
+        setSession(newSession || null);
+
+        if (!newSession) {
+          setProfile(null);
+          setMyApplication(null);
+          setApplications([]);
+          setAdminProducts([]);
+          return;
+        }
+
+        // تأجيل طلبات قاعدة البيانات إلى ما بعد معالجة حدث المصادقة.
+        setTimeout(() => {
+          loadProfile(newSession.user.id);
+          loadMyApplication(newSession.user.id);
+        }, 0);
+      }
+    );
+
+    return () => {
+      alive = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, [loadProducts, loadProfile, loadMyApplication]);
+
+  useEffect(() => {
+    if (isAdmin) {
+      loadAdminProducts();
+      loadApplications();
+    }
+  }, [isAdmin, loadAdminProducts, loadApplications]);
+
+  const visibleProducts = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    if (!query) return products;
+
+    return products.filter((product) =>
+      `${product.name || ''} ${product.description || ''}`
+        .toLowerCase()
+        .includes(query)
+    );
+  }, [products, search]);
 
   async function handleAuth(event) {
     event.preventDefault();
@@ -205,49 +214,44 @@ export default function App() {
     setNotice('');
 
     try {
-      if (authMode === 'forgot') {
-        const { error } = await supabase.auth.resetPasswordForEmail(
-          email.trim(),
-          { redirectTo: STORE_URL }
-        );
-        if (error) throw error;
-        setAuthOpen(false);
-        setPassword('');
-        setNotice('إذا كان البريد مسجلاً، فستصلك رسالة استعادة. افحص البريد الوارد والرسائل غير المرغوب فيها.');
-      } else if (authMode === 'recovery') {
-        const { error } = await supabase.auth.updateUser({ password });
-        if (error) throw error;
-        setPassword('');
-        setAuthMode('login');
-        setAuthOpen(false);
-        setNotice('تم تغيير كلمة المرور بنجاح.');
-      } else if (authMode === 'register') {
+      if (authMode === 'register') {
         const { data, error } = await supabase.auth.signUp({
           email: email.trim(),
           password,
           options: {
-            emailRedirectTo: STORE_URL,
-            data: { full_name: fullName.trim(), phone: phone.trim() }
-          }
+            data: {
+              full_name: fullName.trim(),
+              phone: phone.trim(),
+            },
+          },
         });
+
         if (error) throw error;
-        setPassword('');
-        setAuthOpen(false);
-        setNotice(data.session
-          ? 'تم إنشاء الحساب بنجاح.'
-          : 'تم إرسال طلب التسجيل. افحص بريدك الإلكتروني واضغط رابط التأكيد قبل تسجيل الدخول.');
+
+        if (data.session) {
+          setNotice('تم إنشاء الحساب وتسجيل الدخول.');
+        } else {
+          setNotice('تم إرسال طلب إنشاء الحساب. تفقد بريدك لتأكيده إذا طُلب منك ذلك.');
+        }
+      } else if (authMode === 'reset') {
+        const { error } = await supabase.auth.resetPasswordForEmail(
+          email.trim(),
+          { redirectTo: window.location.origin }
+        );
+
+        if (error) throw error;
+        setNotice('إذا كان البريد مسجلاً، فستصلك رسالة إعادة تعيين كلمة المرور.');
       } else {
         const { error } = await supabase.auth.signInWithPassword({
           email: email.trim(),
-          password
+          password,
         });
+
         if (error) throw error;
-        setPassword('');
-        setAuthOpen(false);
         setNotice('تم تسجيل الدخول بنجاح.');
       }
     } catch (error) {
-      setNotice(error.message || 'تعذر إكمال العملية.');
+      setNotice('حدث خطأ: ' + (error.message || 'تعذّر إكمال العملية.'));
     } finally {
       setBusy(false);
     }
@@ -255,133 +259,141 @@ export default function App() {
 
   async function signOut() {
     const { error } = await supabase.auth.signOut();
-    if (error) setNotice(error.message || 'تعذر تسجيل الخروج.');
-    else {
-      setAdminOpen(false);
-      setNotice('تم تسجيل الخروج.');
-    }
-  }
 
-  function clearSelectedFiles() {
-    setSelectedFiles([]);
-    setUploadPreviews((old) => {
-      old.forEach((url) => URL.revokeObjectURL(url));
-      return [];
-    });
-  }
-
-  function startAddProduct() {
-    setEditingId(null);
-    setProductForm({ ...emptyProduct });
-    clearSelectedFiles();
-    setNotice('');
-  }
-
-  function startEditProduct(product) {
-    setEditingId(product.id);
-    setProductForm({
-      name: product.name || '',
-      description: product.description || '',
-      usage_instructions: product.usage_instructions || '',
-      price_usd: String(product.price_usd ?? ''),
-      image_url: product.image_url || '',
-      image_urls: Array.isArray(product.image_urls) ? product.image_urls : [],
-      stock: String(product.stock ?? 0),
-      is_active: Boolean(product.is_active)
-    });
-    clearSelectedFiles();
-    setNotice('');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-
-  function chooseImages(event) {
-    const files = Array.from(event.target.files || []);
-    event.target.value = '';
-
-    if (!files.length) return;
-
-    const valid = files.filter((file) => {
-      if (!file.type.startsWith('image/')) {
-        setNotice('اختر ملفات صور فقط.');
-        return false;
-      }
-      if (file.size > MAX_FILE_SIZE) {
-        setNotice(`الصورة ${file.name} أكبر من 5 ميغابايت.`);
-        return false;
-      }
-      return true;
-    });
-
-    const remaining = MAX_IMAGES - productForm.image_urls.length - selectedFiles.length;
-    if (remaining <= 0) {
-      setNotice(`الحد الأقصى ${MAX_IMAGES} صور للمنتج.`);
+    if (error) {
+      setNotice('تعذّر تسجيل الخروج: ' + error.message);
       return;
     }
 
-    const accepted = valid.slice(0, remaining);
-    if (valid.length > remaining) {
-      setNotice(`يمكن اختيار ${MAX_IMAGES} صور كحد أقصى.`);
+    setSession(null);
+    setProfile(null);
+    setMyApplication(null);
+    setNotice('تم تسجيل الخروج.');
+  }
+
+  async function submitSellerApplication(event) {
+    event.preventDefault();
+
+    if (!user) {
+      setNotice('سجّل الدخول أولاً لتقديم طلب فتح متجر.');
+      return;
     }
 
-    setSelectedFiles((old) => [...old, ...accepted]);
-    setUploadPreviews((old) => [
-      ...old,
-      ...accepted.map((file) => URL.createObjectURL(file))
-    ]);
-  }
+    if (myApplication) {
+      setNotice('لديك طلب متجر مسجل بالفعل.');
+      return;
+    }
 
-  function removeNewImage(index) {
-    setSelectedFiles((old) => old.filter((_, i) => i !== index));
-    setUploadPreviews((old) => {
-      const removed = old[index];
-      if (removed) URL.revokeObjectURL(removed);
-      return old.filter((_, i) => i !== index);
-    });
-  }
+    const storeName = sellerForm.store_name.trim();
 
-  function removeExistingImage(url) {
-    setProductForm((old) => ({
-      ...old,
-      image_url: old.image_url === url ? '' : old.image_url,
-      image_urls: old.image_urls.filter((item) => item !== url)
-    }));
-  }
+    if (storeName.length < 2 || storeName.length > 80) {
+      setNotice('اسم المتجر يجب أن يكون بين حرفين و80 حرفاً.');
+      return;
+    }
 
-  async function uploadProductImages(files) {
-    const urls = [];
+    setBusy(true);
+    setNotice('');
 
-    for (const file of files) {
-      const safeName = file.name
-        .normalize('NFKD')
-        .replace(/[^a-zA-Z0-9._-]/g, '-')
-        .slice(-80) || 'image';
-
-      const path = `${session.user.id}/${Date.now()}-${crypto.randomUUID()}-${safeName}`;
-      const { data, error } = await supabase.storage
-        .from(BUCKET)
-        .upload(path, file, {
-          cacheControl: '3600',
-          upsert: false,
-          contentType: file.type
-        });
+    try {
+      const { data, error } = await supabase
+        .from('seller_applications')
+        .insert({
+          user_id: user.id,
+          store_name: storeName,
+          description: sellerForm.description.trim(),
+          status: 'pending',
+        })
+        .select()
+        .single();
 
       if (error) throw error;
 
-      const { data: publicData } = supabase.storage
-        .from(BUCKET)
-        .getPublicUrl(data.path);
+      setMyApplication(data);
+      setNotice('تم إرسال طلبك بنجاح. انتظر مراجعة الإدارة.');
+    } catch (error) {
+      if (error.code === '23505') {
+        await loadMyApplication(user.id);
+        setNotice('لديك طلب سابق بالفعل.');
+      } else {
+        setNotice('تعذّر إرسال الطلب: ' + error.message);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
 
-      urls.push(publicData.publicUrl);
+  async function reviewApplication(applicationId, approve) {
+    if (!isAdmin) {
+      setNotice('هذه العملية متاحة للإدارة فقط.');
+      return;
     }
 
-    return urls;
+    const application = applications.find((item) => item.id === applicationId);
+
+    if (!application || application.status !== 'pending') {
+      setNotice('هذا الطلب غير موجود أو تمت مراجعته مسبقاً.');
+      return;
+    }
+
+    setBusy(true);
+    setNotice('');
+
+    try {
+      if (approve) {
+        const { error } = await supabase.rpc(
+          'approve_seller_application',
+          { application_id: applicationId }
+        );
+
+        if (error) throw error;
+        setNotice('تمت الموافقة على طلب المتجر.');
+      } else {
+        const { error } = await supabase
+          .from('seller_applications')
+          .update({
+            status: 'rejected',
+            reviewed_at: new Date().toISOString(),
+          })
+          .eq('id', applicationId)
+          .eq('status', 'pending');
+
+        if (error) throw error;
+        setNotice('تم رفض طلب المتجر.');
+      }
+
+      await loadApplications();
+      await loadAdminProducts();
+    } catch (error) {
+      setNotice('تعذّرت مراجعة الطلب: ' + error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startNewProduct() {
+    setEditingProductId(null);
+    setProductForm(emptyProduct);
+  }
+
+  function startEditProduct(product) {
+    setEditingProductId(product.id);
+    setProductForm({
+      name: product.name || '',
+      description: product.description || '',
+      price_usd: String(product.price_usd ?? ''),
+      image_url: product.image_url || '',
+      stock: String(product.stock ?? 0),
+      usage_instructions: product.usage_instructions || '',
+    });
+
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
   }
 
   async function saveProduct(event) {
     event.preventDefault();
 
-    if (!isAdmin || !session?.user?.id) {
-      setNotice('هذه العملية متاحة لحساب المدير فقط.');
+    if (!isAdmin) {
+      setNotice('إدارة المنتجات متاحة للإدارة فقط.');
       return;
     }
 
@@ -392,516 +404,648 @@ export default function App() {
       setNotice('اكتب اسم المنتج.');
       return;
     }
+
     if (!Number.isFinite(price) || price < 0) {
-      setNotice('أدخل سعراً صحيحاً بالدولار.');
-      return;
-    }
-    if (!Number.isInteger(stock) || stock < 0) {
-      setNotice('المخزون يجب أن يكون عدداً صحيحاً غير سالب.');
+      setNotice('أدخل سعراً صحيحاً.');
       return;
     }
 
-    setProductBusy(true);
+    if (!Number.isInteger(stock) || stock < 0) {
+      setNotice('أدخل كمية مخزون صحيحة.');
+      return;
+    }
+
+    const payload = {
+      name: productForm.name.trim(),
+      description: productForm.description.trim(),
+      price_usd: price,
+      image_url: productForm.image_url.trim(),
+      stock,
+      usage_instructions: productForm.usage_instructions.trim(),
+      is_active: true,
+      seller_id: ADMIN_SELLER_ID,
+      updated_at: new Date().toISOString(),
+    };
+
+    setBusy(true);
     setNotice('');
 
-    let uploadedUrls = [];
-
     try {
-      if (selectedFiles.length) {
-        setNotice('جارٍ رفع الصور...');
-        uploadedUrls = await uploadProductImages(selectedFiles);
-      }
-
-      const allImages = [
-        ...new Set([...productForm.image_urls, ...uploadedUrls].filter(Boolean))
-      ].slice(0, MAX_IMAGES);
-
-      const mainImage = allImages[0] || productForm.image_url.trim() || null;
-
-      const values = {
-        name: productForm.name.trim(),
-        description: productForm.description.trim(),
-        usage_instructions: productForm.usage_instructions.trim(),
-        price_usd: price,
-        image_url: mainImage,
-        image_urls: allImages,
-        stock,
-        is_active: Boolean(productForm.is_active),
-        updated_at: new Date().toISOString()
-      };
-
       let result;
-      if (editingId) {
+
+      if (editingProductId) {
         result = await supabase
           .from('products')
-          .update(values)
-          .eq('id', editingId)
-          .select('id')
-          .maybeSingle();
+          .update(payload)
+          .eq('id', editingProductId);
       } else {
-        result = await supabase
-          .from('products')
-          .insert({ ...values, seller_id: ADMIN_SELLER_ID })
-          .select('id')
-          .single();
+        result = await supabase.from('products').insert(payload);
       }
 
       if (result.error) throw result.error;
-      if (!result.data) {
-        throw new Error('لم يتم تأكيد حفظ المنتج. حدّث القائمة وتحقق من النتيجة.');
-      }
 
-      setNotice(editingId ? 'تم تحديث المنتج وصوره.' : 'تمت إضافة المنتج وصوره.');
-      setProductForm({ ...emptyProduct });
-      setEditingId(null);
-      clearSelectedFiles();
-      await Promise.all([loadAdminProducts(), loadProducts()]);
+      setNotice(editingProductId ? 'تم تحديث المنتج.' : 'تمت إضافة المنتج.');
+      startNewProduct();
+      await loadProducts();
+      await loadAdminProducts();
     } catch (error) {
-      setNotice('تعذر حفظ المنتج: ' + (error.message || 'خطأ غير معروف'));
+      setNotice('تعذّر حفظ المنتج: ' + error.message);
     } finally {
-      setProductBusy(false);
+      setBusy(false);
     }
   }
 
   async function toggleProduct(product) {
     if (!isAdmin) return;
+
     const { error } = await supabase
       .from('products')
       .update({
         is_active: !product.is_active,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
       })
       .eq('id', product.id);
 
     if (error) {
-      setNotice('تعذر تغيير حالة النشر: ' + error.message);
+      setNotice('تعذّر تغيير حالة المنتج: ' + error.message);
       return;
     }
-    setNotice(product.is_active ? 'تم إخفاء المنتج.' : 'تم نشر المنتج.');
-    await Promise.all([loadAdminProducts(), loadProducts()]);
+
+    setNotice(product.is_active ? 'تم إخفاء المنتج.' : 'تم تفعيل المنتج.');
+    await loadProducts();
+    await loadAdminProducts();
   }
 
-  async function deleteProduct(product) {
-    if (!isAdmin) return;
-    if (!window.confirm(`هل تريد حذف المنتج "${product.name}" نهائياً؟`)) return;
-
-    const { error } = await supabase
-      .from('products')
-      .delete()
-      .eq('id', product.id);
-
-    if (error) {
-      setNotice('تعذر حذف المنتج: ' + error.message);
-      return;
-    }
-    if (editingId === product.id) startAddProduct();
-    setNotice('تم حذف المنتج من قاعدة البيانات. قد تبقى ملفاته في التخزين.');
-    await Promise.all([loadAdminProducts(), loadProducts()]);
+  function statusLabel(status) {
+    if (status === 'approved') return 'مقبول';
+    if (status === 'rejected') return 'مرفوض';
+    return 'قيد المراجعة';
   }
-
-  function openDetails(product) {
-    setDetailProduct(product);
-    setDetailImageIndex(0);
-  }
-
-  function addToCart(product) {
-    if (product.stock <= 0) {
-      setNotice('هذا المنتج غير متوفر حالياً.');
-      return;
-    }
-    setCart((old) => {
-      const found = old.find((item) => item.id === product.id);
-      const quantity = found ? found.quantity : 0;
-      if (quantity >= product.stock) {
-        setNotice('لا يمكن إضافة كمية أكبر من المخزون.');
-        return old;
-      }
-      return found
-        ? old.map((item) => item.id === product.id
-          ? { ...item, quantity: item.quantity + 1 }
-          : item)
-        : [...old, { ...product, quantity: 1 }];
-    });
-    setNotice('تمت إضافة المنتج إلى السلة. الدفع غير مفعّل بعد.');
-  }
-
-  function changeQuantity(id, delta) {
-    setCart((old) => old
-      .map((item) => item.id === id
-        ? { ...item, quantity: Math.max(0, Math.min(item.stock, item.quantity + delta)) }
-        : item)
-      .filter((item) => item.quantity > 0));
-  }
-
-  const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
-  const cartTotal = cart.reduce((sum, item) => sum + item.price_usd * item.quantity, 0);
-
-  function rateProduct(productId, stars) {
-    setMyRatings((old) => ({ ...old, [productId]: stars }));
-    setRatings((old) => {
-      const previous = old[productId] || { total: 0, count: 0 };
-      const myPrevious = myRatings[productId];
-      if (myPrevious) {
-        return {
-          ...old,
-          [productId]: {
-            total: previous.total - myPrevious + stars,
-            count: previous.count
-          }
-        };
-      }
-      return {
-        ...old,
-        [productId]: { total: previous.total + stars, count: previous.count + 1 }
-      };
-    });
-  }
-
-  const visibleProducts = products.filter((product) => {
-    const term = search.toLowerCase();
-    const matchesSearch =
-      (product.name || '').toLowerCase().includes(term) ||
-      (product.description || '').toLowerCase().includes(term);
-    return matchesSearch && category === 'الكل';
-  });
 
   return (
-    <div className="app" dir="rtl">
-      <div className="announcement">
-        <ShieldCheck size={15} />
-        <span>سوق NEXORA — اكتشف المنتجات من بائعين معتمدين</span>
-      </div>
+    <div className="nexora" dir="rtl">
+      <style>{`
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #080d18; color: #edf2ff; font-family: Arial, sans-serif; }
+        button, input, textarea { font: inherit; }
+        button { cursor: pointer; }
+        .nexora { min-height: 100vh; background: radial-gradient(circle at top right,#172746 0,#080d18 42%); color: #edf2ff; }
+        .wrap { width: min(1120px,94%); margin: auto; }
+        .topbar { padding: 18px 0; border-bottom: 1px solid #253149; background: #080d18dd; }
+        .topline { display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap:wrap; }
+        .brand { font-size:27px; font-weight:900; color:#f5c96b; letter-spacing:1px; }
+        .muted { color:#aab7d0; }
+        .hero { padding:48px 0 26px; }
+        .hero h1 { font-size:clamp(30px,6vw,48px); margin:0 0 12px; }
+        .gold { color:#f5c96b; }
+        .panel { background:#101a2b; border:1px solid #263650; border-radius:18px; padding:20px; margin:20px 0; }
+        .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }
+        .product { overflow:hidden; background:#101a2b; border:1px solid #263650; border-radius:16px; }
+        .product img { width:100%; height:190px; object-fit:cover; background:#0b1322; }
+        .product-body { padding:15px; }
+        .product h3 { margin:0 0 8px; }
+        .price { color:#f5c96b; font-weight:800; font-size:20px; }
+        .btn { border:0; border-radius:10px; padding:11px 15px; font-weight:700; background:#f5c96b; color:#15100a; }
+        .btn.secondary { background:#263650; color:#edf2ff; border:1px solid #40516d; }
+        .btn.danger { background:#572b39; color:#fff; }
+        .btn:disabled { opacity:.55; cursor:not-allowed; }
+        .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+        .field { display:grid; gap:7px; margin:12px 0; }
+        .field input, .field textarea, .search { width:100%; padding:12px; border-radius:10px; border:1px solid #354663; background:#09111f; color:#fff; outline:none; }
+        .field textarea { min-height:90px; resize:vertical; }
+        .row2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+        .notice { padding:12px 14px; border-radius:10px; background:#172844; border:1px solid #354c6d; margin:15px auto; }
+        .status { display:inline-block; border-radius:20px; padding:5px 10px; background:#263650; font-size:13px; }
+        .application { padding:15px 0; border-bottom:1px solid #2a3950; overflow-wrap:anywhere; }
+        .empty { padding:25px; text-align:center; color:#aab7d0; }
+        .footer { padding:30px 0; text-align:center; color:#8d9bb5; }
+        .small { font-size:13px; overflow-wrap:anywhere; }
+        @media(max-width:520px) { .hero { padding-top:30px; } .panel { padding:15px; } }
+      `}</style>
 
       <header className="topbar">
-        <a className="brand" href="#home" aria-label="NEXORA الرئيسية">
-          <span className="brand-mark">N</span>
-          <span><strong>NEXORA</strong><small>MARKETPLACE</small></span>
-        </a>
-        <div className="header-actions">
-          <button className="icon-button" onClick={() => setCartOpen(true)}>
-            <ShoppingCart size={19} /><span>السلة ({cartCount})</span>
-          </button>
-          {session ? (
-            <>
-              {isAdmin && (
-                <button className="icon-button" onClick={() => {
-                  setAdminOpen(!adminOpen);
-                  if (!adminOpen) loadAdminProducts();
-                }}>
-                  <Settings size={19} /><span>الإدارة</span>
+        <div className="wrap topline">
+          <div>
+            <div className="brand">NEXORA</div>
+            <div className="muted small">متجرك الرقمي في مكان واحد</div>
+          </div>
+
+          <div className="actions">
+            {user ? (
+              <>
+                <span className="status">{profile?.full_name || user.email}</span>
+                <button className="btn secondary" onClick={signOut}>
+                  تسجيل الخروج
                 </button>
-              )}
-              <button className="icon-button" onClick={signOut}>
-                <UserRound size={20} /><span>خروج</span>
-              </button>
-            </>
-          ) : (
-            <button className="icon-button" onClick={() => openAuth('login')}>
-              <LogIn size={19} /><span>دخول</span>
-            </button>
-          )}
-          <a href="#products" className="bag-button">
-            <ShoppingBag size={19} /><span>تسوّق</span>
-          </a>
+              </>
+            ) : (
+              <a href="#account">
+                <button className="btn">تسجيل الدخول</button>
+              </a>
+            )}
+          </div>
         </div>
       </header>
 
-      <main id="home">
-        {adminChecking && session && <p style={{ textAlign: 'center' }}>جارٍ التحقق من صلاحيات الحساب...</p>}
-
-        {adminOpen && isAdmin && (
-          <section style={{
-            margin: '20px auto', padding: 18,
-            width: 'min(1100px, calc(100% - 28px))',
-            boxSizing: 'border-box', border: '1px solid #dce3ed',
-            borderRadius: 18, background: '#f7f9fc', color: '#172033'
-          }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18 }}>
-              <div>
-                <h2><Settings size={22} style={{ verticalAlign: 'middle' }} /> لوحة إدارة NEXORA</h2>
-                <p>إدارة المنتجات والأسعار والصور والمخزون والنشر.</p>
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                <button style={adminButtonStyle} onClick={loadAdminProducts}><RefreshCw size={17} /> تحديث</button>
-                <button style={{ ...adminButtonStyle, background: '#172033', color: '#fff' }} onClick={startAddProduct}><Plus size={18} /> منتج جديد</button>
-                <button style={adminButtonStyle} onClick={() => setAdminOpen(false)}><X size={17} /> إغلاق</button>
-              </div>
-            </div>
-
-            <form onSubmit={saveProduct} style={{
-              display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 230px), 1fr))',
-              gap: 14, background: '#fff', border: '1px solid #e1e6ee',
-              borderRadius: 14, padding: 16, marginBottom: 20
-            }}>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <h3>{editingId ? 'تعديل المنتج' : 'إضافة منتج جديد'}</h3>
-                <p style={{ color: '#647084', fontSize: 13 }}>يمكنك اختيار حتى {MAX_IMAGES} صور، بحد أقصى 5 ميغابايت للصورة.</p>
-              </div>
-
-              <label>اسم المنتج *
-                <input style={inputStyle} value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} required maxLength={160} placeholder="مثال: سماعات لاسلكية" />
-              </label>
-
-              <label>السعر بالدولار *
-                <input style={inputStyle} type="number" min="0" step="0.01" value={productForm.price_usd} onChange={(e) => setProductForm({ ...productForm, price_usd: e.target.value })} required placeholder="15.50" />
-              </label>
-
-              <label>المخزون *
-                <input style={inputStyle} type="number" min="0" step="1" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })} required />
-              </label>
-
-              <label style={{ gridColumn: '1 / -1' }}>وصف المنتج
-                <textarea style={{ ...inputStyle, minHeight: 90 }} value={productForm.description} onChange={(e) => setProductForm({ ...productForm, description: e.target.value })} maxLength={5000} placeholder="اكتب تفاصيل المنتج..." />
-              </label>
-
-              <label style={{ gridColumn: '1 / -1' }}>طريقة الاستخدام أو تعليمات المنتج
-                <textarea style={{ ...inputStyle, minHeight: 80 }} value={productForm.usage_instructions} onChange={(e) => setProductForm({ ...productForm, usage_instructions: e.target.value })} maxLength={5000} placeholder="كيف يُستخدم المنتج؟" />
-              </label>
-
-              <div style={{ gridColumn: '1 / -1' }}>
-                <label style={{ display: 'block' }}>صور المنتج من معرض الهاتف</label>
-                <label style={{
-                  ...adminButtonStyle, marginTop: 8, cursor: 'pointer',
-                  background: '#172033', color: '#fff'
-                }}>
-                  <ImagePlus size={18} /> اختيار صور
-                  <input type="file" accept="image/*" multiple onChange={chooseImages} style={{ display: 'none' }} />
-                </label>
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(95px, 1fr))', gap: 10, marginTop: 12 }}>
-                  {productForm.image_urls.map((url) => (
-                    <div key={url} style={{ position: 'relative' }}>
-                      <img src={url} alt="صورة المنتج" style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: 10 }} />
-                      <button type="button" onClick={() => removeExistingImage(url)} style={{ ...adminButtonStyle, position: 'absolute', top: 3, left: 3, padding: 5, background: '#fff' }}><X size={15} /></button>
-                    </div>
-                  ))}
-                  {uploadPreviews.map((url, index) => (
-                    <div key={url} style={{ position: 'relative' }}>
-                      <img src={url} alt="صورة جديدة" style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: 10 }} />
-                      <button type="button" onClick={() => removeNewImage(index)} style={{ ...adminButtonStyle, position: 'absolute', top: 3, left: 3, padding: 5 }}><X size={15} /></button>
-                    </div>
-                  ))}
-                </div>
-                <p style={{ color: '#647084', fontSize: 12 }}>عدد الصور: {productForm.image_urls.length + selectedFiles.length} / {MAX_IMAGES}</p>
-
-                <details style={{ marginTop: 8 }}>
-                  <summary>أو استخدم رابط صورة قديم (اختياري)</summary>
-                  <input style={inputStyle} type="url" value={productForm.image_url} onChange={(e) => setProductForm({ ...productForm, image_url: e.target.value })} placeholder="https://example.com/image.jpg" />
-                </details>
-              </div>
-
-              <label style={{ display: 'flex', alignItems: 'center', gap: 9, gridColumn: '1 / -1', cursor: 'pointer' }}>
-                <input type="checkbox" checked={productForm.is_active} onChange={(e) => setProductForm({ ...productForm, is_active: e.target.checked })} />
-                نشر المنتج وإظهاره للزوار فور الحفظ
-              </label>
-
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, gridColumn: '1 / -1' }}>
-                <button className="primary-button" type="submit" disabled={productBusy}>
-                  {productBusy ? 'جارٍ الحفظ والرفع...' : editingId ? 'حفظ التعديلات' : 'إضافة المنتج'}
-                </button>
-                <button type="button" style={adminButtonStyle} onClick={startAddProduct} disabled={productBusy}>إلغاء / تفريغ الحقول</button>
-              </div>
-            </form>
-
-            <h3>جميع المنتجات ({adminProducts.length})</h3>
-            {adminLoading ? <p>جارٍ تحميل المنتجات...</p> : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: 12 }}>
-                {adminProducts.map((product) => (
-                  <article key={product.id} style={{ background: '#fff', border: '1px solid #e0e5ed', borderRadius: 14, padding: 13, minWidth: 0 }}>
-                    {productImages(product)[0] ? (
-                      <img src={productImages(product)[0]} alt={product.name} style={{ width: '100%', height: 150, objectFit: 'contain', borderRadius: 10, background: '#f1f4f8' }} />
-                    ) : <div style={{ height: 110, display: 'grid', placeItems: 'center', background: '#f1f4f8', borderRadius: 10 }}><Package size={36} /></div>}
-                    <h4>{product.name}</h4>
-                    <p style={{ color: '#657084', fontSize: 13 }}>{product.description || 'لا يوجد وصف'}</p>
-                    <strong>${Number(product.price_usd).toFixed(2)}</strong>
-                    <p>المخزون: {product.stock} · الصور: {productImages(product).length}</p>
-                    <p style={{ color: product.is_active ? '#167044' : '#9a4b15' }}>{product.is_active ? 'منشور للزوار' : 'مخفي عن الزوار'}</p>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-                      <button style={adminButtonStyle} onClick={() => startEditProduct(product)}><Pencil size={16} /> تعديل</button>
-                      <button style={adminButtonStyle} onClick={() => toggleProduct(product)}>{product.is_active ? <EyeOff size={16} /> : <Eye size={16} />}{product.is_active ? 'إخفاء' : 'نشر'}</button>
-                      <button style={{ ...adminButtonStyle, color: '#b42318' }} onClick={() => deleteProduct(product)}><Trash2 size={16} /> حذف</button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
+      <main className="wrap">
+        {notice && (
+          <div className="notice">
+            {notice}
+            <button
+              className="btn secondary"
+              style={{ float: 'left', padding: '4px 9px' }}
+              onClick={() => setNotice('')}
+            >
+              إغلاق
+            </button>
+          </div>
         )}
 
         <section className="hero">
-          <div className="hero-content">
-            <span className="eyebrow"><span className="live-dot" /> عالم جديد للتسوّق</span>
-            <h1>كل ما تبحث عنه،<br /><span>في مكان واحد.</span></h1>
-            <p>اكتشف منتجات متنوعة، وتسوّق من متاجر مستقلة، مع تجربة بسيطة وواضحة.</p>
-            <a className="primary-button" href="#products">اكتشف المنتجات <ArrowLeft size={18} /></a>
-            <div className="hero-trust">
-              <span><ShieldCheck size={16} /> بائعون تتم مراجعتهم</span>
-              <span><Globe2 size={16} /> سوريا أولًا</span>
+          <p className="gold">اكتشف منتجاتنا الرقمية</p>
+          <h1>أهلاً بك في <span className="gold">NEXORA</span></h1>
+          <p className="muted">
+            تصفّح المنتجات المتاحة، أو سجّل حساباً وقدّم طلباً لفتح متجرك الخاص.
+          </p>
+          <div className="actions">
+            <a href="#products"><button className="btn">تصفّح المنتجات</button></a>
+            <a href="#seller"><button className="btn secondary">افتح متجرك</button></a>
+          </div>
+        </section>
+
+        <section id="products" className="panel">
+          <div className="topline">
+            <div>
+              <h2>المنتجات</h2>
+              <p className="muted">المنتجات المنشورة في المتجر</p>
+            </div>
+            <div style={{ minWidth: 'min(100%,240px)' }}>
+              <input
+                className="search"
+                placeholder="ابحث عن منتج..."
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
             </div>
           </div>
-          <div className="hero-art" aria-label="تصميم زخرفي للتسوق">
-            <div className="orbit orbit-one" /><div className="orbit orbit-two" />
-            <div className="hero-package"><ShoppingBag size={74} strokeWidth={1.2} /><span>NEXORA</span></div>
-            <div className="floating-card card-top">✦ اختيارات مميزة</div>
-            <div className="floating-card card-bottom">🛍️ اكتشف شيئًا جديدًا</div>
-          </div>
-        </section>
 
-        <section className="stats-strip">
-          <div><Store /><strong>متاجر متعددة</strong><span>تحت مراجعة الإدارة</span></div>
-          <div><Package /><strong>منتجات متنوعة</strong><span>تُضاف من البائعين المعتمدين</span></div>
-          <div><Headphones /><strong>فريق الدعم</strong><span>لمساعدتك عند الحاجة</span></div>
-        </section>
-
-        <section className="section categories-section">
-          <div className="section-heading"><div><span className="section-kicker">تصفّح بسهولة</span><h2>الأقسام</h2></div></div>
-          <div className="category-grid">
-            <button className={`category-card ${category === 'الكل' ? 'selected' : ''}`} onClick={() => setCategory('الكل')}><span>✦</span><strong>كل المنتجات</strong></button>
-            {categories.map((item) => (
-              <button className={`category-card ${category === item.name ? 'selected' : ''}`} key={item.name} onClick={() => setCategory(item.name)}>
-                <span>{item.icon}</span><strong>{item.name}</strong>
-              </button>
-            ))}
-          </div>
-          {category !== 'الكل' && <p style={{ color: '#9a4b15' }}>فلترة الأقسام غير مفعّلة بعد. <button style={adminButtonStyle} onClick={() => setCategory('الكل')}>عرض الكل</button></p>}
-        </section>
-
-        <section className="section products-section" id="products">
-          <div className="section-heading products-heading">
-            <div><span className="section-kicker">اختيارات المتاجر</span><h2>اكتشف المنتجات</h2><p>الأسعار معروضة بالدولار الأمريكي.</p></div>
-            <div className="search-box"><Search size={19} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ابحث عن منتج..." aria-label="البحث عن منتج" /></div>
-          </div>
-
-          {loading ? <div className="empty-state"><div className="loader" /><p>جارٍ تحميل المنتجات...</p></div> :
-          visibleProducts.length === 0 ? <div className="empty-state"><div className="empty-icon"><ShoppingBag size={30} /></div><h3>لا توجد منتجات للعرض حاليًا</h3><p>عندما تُضاف المنتجات وتنشر، ستظهر هنا.</p><button className="outline-button" onClick={loadProducts}>تحديث المنتجات</button></div> :
-          <div className="product-grid">
-            {visibleProducts.map((product) => {
-              const images = productImages(product);
-              const rating = ratings[product.id];
-              return (
-                <article className="product-card" key={product.id}>
-                  <div className="product-image" onClick={() => openDetails(product)} style={{ cursor: 'pointer' }}>
-                    {images[0] ? <img src={images[0]} alt={product.name} loading="lazy" /> : <div className="product-placeholder"><Package size={42} /></div>}
-                    <span className="product-label">من متجر مستقل</span>
-                  </div>
-                  <div className="product-info">
+          {visibleProducts.length === 0 ? (
+            <div className="empty">لا توجد منتجات مطابقة حالياً.</div>
+          ) : (
+            <div className="grid">
+              {visibleProducts.map((product) => (
+                <article className="product" key={product.id}>
+                  {product.image_url ? (
+                    <img src={product.image_url} alt={product.name} />
+                  ) : (
+                    <div
+                      style={{
+                        height: 190,
+                        display: 'grid',
+                        placeItems: 'center',
+                        background: '#0b1322',
+                        color: '#f5c96b',
+                        fontSize: 28,
+                      }}
+                    >
+                      NEXORA
+                    </div>
+                  )}
+                  <div className="product-body">
                     <h3>{product.name}</h3>
-                    <p>{product.description || 'تفاصيل المنتج متاحة عند فتح صفحة المنتج.'}</p>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, margin: '8px 0', color: '#b7791f' }}>
-                      {[1, 2, 3, 4, 5].map((star) => <Star key={star} size={15} fill={star <= (myRatings[product.id] || (rating?.count ? Math.round(rating.total / rating.count) : 0)) ? 'currentColor' : 'none'} />)}
-                      <small style={{ color: '#647084' }}>{rating?.count ? `(${rating.count})` : '(لا تقييمات)'}</small>
-                    </div>
-                    <div className="product-bottom">
-                      <strong>${Number(product.price_usd).toFixed(2)}</strong>
-                      <button className="outline-button" onClick={() => openDetails(product)}>التفاصيل</button>
-                    </div>
+                    <p className="muted">
+                      {product.description || 'لا يوجد وصف لهذا المنتج.'}
+                    </p>
+                    <p className="price">{money(product.price_usd)}</p>
+                    <button
+                      className="btn"
+                      onClick={() => setSelectedProduct(product)}
+                    >
+                      تفاصيل المنتج
+                    </button>
                   </div>
                 </article>
-              );
-            })}
-          </div>}
+              ))}
+            </div>
+          )}
         </section>
 
-        <section className="seller-banner">
-          <div className="seller-symbol"><Store size={30} /></div>
-          <div className="seller-copy"><span className="section-kicker">لأصحاب الأعمال</span><h2>هل تريد عرض منتجاتك؟</h2><p>قدّم طلب الانضمام إلى NEXORA. الإدارة تراجع الطلب قبل تفعيل متجرك.</p></div>
-          <button className="primary-button" onClick={() => setNotice('خدمة طلبات البائعين لم تُفعّل بعد. لا تدفع رسوم انضمام غير معلنة.')}>طلب الانضمام <ArrowLeft size={18} /></button>
+        {selectedProduct && (
+          <section className="panel">
+            <div className="topline">
+              <h2>{selectedProduct.name}</h2>
+              <button
+                className="btn secondary"
+                onClick={() => setSelectedProduct(null)}
+              >
+                إغلاق التفاصيل
+              </button>
+            </div>
+            {selectedProduct.image_url && (
+              <img
+                src={selectedProduct.image_url}
+                alt={selectedProduct.name}
+                style={{
+                  width: '100%',
+                  maxWidth: 420,
+                  maxHeight: 300,
+                  objectFit: 'contain',
+                  borderRadius: 12,
+                }}
+              />
+            )}
+            <p>{selectedProduct.description}</p>
+            <p><strong>السعر:</strong> {money(selectedProduct.price_usd)}</p>
+            <p>
+              <strong>المخزون:</strong>{' '}
+              {selectedProduct.stock > 0 ? 'متوفر' : 'غير متوفر حالياً'}
+            </p>
+            {selectedProduct.usage_instructions && (
+              <>
+                <h3>طريقة الاستخدام</h3>
+                <p>{selectedProduct.usage_instructions}</p>
+              </>
+            )}
+            <p className="muted">
+              الشراء والدفع الإلكتروني غير مفعّلين في هذه المرحلة.
+            </p>
+          </section>
+        )}
+
+        <section id="account" className="panel">
+          <h2>{user ? 'حسابك' : 'حساب العميل'}</h2>
+
+          {user ? (
+            <>
+              <p>تم تسجيل الدخول باستخدام: {user.email}</p>
+              <p className="muted small">معرّف الحساب: {user.id}</p>
+            </>
+          ) : (
+            <>
+              <div className="actions">
+                <button
+                  className={`btn ${authMode === 'login' ? '' : 'secondary'}`}
+                  onClick={() => setAuthMode('login')}
+                >
+                  تسجيل الدخول
+                </button>
+                <button
+                  className={`btn ${authMode === 'register' ? '' : 'secondary'}`}
+                  onClick={() => setAuthMode('register')}
+                >
+                  إنشاء حساب
+                </button>
+                <button
+                  className={`btn ${authMode === 'reset' ? '' : 'secondary'}`}
+                  onClick={() => setAuthMode('reset')}
+                >
+                  نسيت كلمة المرور
+                </button>
+              </div>
+
+              <form onSubmit={handleAuth}>
+                {authMode === 'register' && (
+                  <>
+                    <div className="field">
+                      <label>الاسم الكامل</label>
+                      <input
+                        value={fullName}
+                        onChange={(event) => setFullName(event.target.value)}
+                        required
+                        maxLength={100}
+                      />
+                    </div>
+                    <div className="field">
+                      <label>رقم الهاتف</label>
+                      <input
+                        value={phone}
+                        onChange={(event) => setPhone(event.target.value)}
+                        maxLength={30}
+                      />
+                    </div>
+                  </>
+                )}
+
+                <div className="field">
+                  <label>البريد الإلكتروني</label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    required
+                  />
+                </div>
+
+                {authMode !== 'reset' && (
+                  <div className="field">
+                    <label>كلمة المرور</label>
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      minLength={6}
+                      required
+                    />
+                  </div>
+                )}
+
+                <button className="btn" type="submit" disabled={busy}>
+                  {busy
+                    ? 'يرجى الانتظار...'
+                    : authMode === 'register'
+                    ? 'إنشاء الحساب'
+                    : authMode === 'reset'
+                    ? 'إرسال رابط الاستعادة'
+                    : 'دخول'}
+                </button>
+              </form>
+            </>
+          )}
         </section>
 
-        <section className="service-grid">
-          <div className="service-card"><div className="service-icon"><Truck /></div><h3>خدمات التوصيل</h3><p>رسوم التوصيل ستظهر منفصلة عن سعر المنتج عند تفعيل الطلبات.</p></div>
-          <div className="service-card"><div className="service-icon"><Headphones /></div><h3>الدعم والمساعدة</h3><p>قسم مخصص لمتابعة استفسارات العملاء والبائعين.</p></div>
-          <div className="service-card"><div className="service-icon"><ShieldCheck /></div><h3>تجربة أكثر أمانًا</h3><p>لن نعرض الدفع على أنه فعّال حتى يتم إعداد آلية موثوقة للتحقق من المدفوعات.</p></div>
+        <section id="seller" className="panel">
+          <h2>افتح متجرك على NEXORA</h2>
+          <p className="muted">
+            أرسل طلبك للإدارة. بعد الموافقة، تتم إضافة حسابك كبائع.
+          </p>
+
+          {!user ? (
+            <p>سجّل الدخول أولاً، ثم ارجع إلى هذا القسم لتقديم طلبك.</p>
+          ) : myApplication ? (
+            <>
+              <p>
+                حالة الطلب:{' '}
+                <span className="status">
+                  {statusLabel(myApplication.status)}
+                </span>
+              </p>
+              <p><strong>اسم المتجر:</strong> {myApplication.store_name}</p>
+              <p className="muted">{myApplication.description}</p>
+              {myApplication.status === 'approved' && (
+                <p>تمت الموافقة على طلبك. تواصل مع الإدارة بشأن تفعيل إدارة منتجات البائع.</p>
+              )}
+              {myApplication.status === 'rejected' && (
+                <p>تم رفض الطلب. يرجى التواصل مع الإدارة لمعرفة الخطوة التالية.</p>
+              )}
+            </>
+          ) : (
+            <form onSubmit={submitSellerApplication}>
+              <div className="field">
+                <label>اسم المتجر</label>
+                <input
+                  value={sellerForm.store_name}
+                  onChange={(event) =>
+                    setSellerForm({
+                      ...sellerForm,
+                      store_name: event.target.value,
+                    })
+                  }
+                  minLength={2}
+                  maxLength={80}
+                  required
+                  placeholder="اكتب اسم متجرك"
+                />
+              </div>
+
+              <div className="field">
+                <label>وصف المتجر</label>
+                <textarea
+                  value={sellerForm.description}
+                  onChange={(event) =>
+                    setSellerForm({
+                      ...sellerForm,
+                      description: event.target.value,
+                    })
+                  }
+                  maxLength={1000}
+                  placeholder="ما المنتجات التي تريد بيعها؟"
+                />
+              </div>
+
+              <button className="btn" type="submit" disabled={busy}>
+                {busy ? 'جارٍ إرسال الطلب...' : 'إرسال طلب فتح متجر'}
+              </button>
+            </form>
+          )}
         </section>
 
-        <section className="coming-soon"><Globe2 size={24} /><div><strong>نبدأ من سوريا</strong><p>Coming soon in Iraq and Iran</p></div></section>
+        {isAdmin && (
+          <section id="admin" className="panel">
+            <h2>لوحة إدارة NEXORA</h2>
+            <p className="muted">
+              إدارة المنتجات ومراجعة طلبات فتح المتاجر.
+            </p>
+
+            <div className="topline">
+              <h3>طلبات البائعين ({applications.length})</h3>
+              <button
+                className="btn secondary"
+                onClick={loadApplications}
+                disabled={busy}
+              >
+                تحديث الطلبات
+              </button>
+            </div>
+
+            {applications.length === 0 ? (
+              <div className="empty">لا توجد طلبات حالياً.</div>
+            ) : (
+              applications.map((application) => (
+                <div className="application" key={application.id}>
+                  <div className="topline">
+                    <h3>{application.store_name}</h3>
+                    <span className="status">
+                      {statusLabel(application.status)}
+                    </span>
+                  </div>
+                  <p>{application.description || 'لا يوجد وصف.'}</p>
+                  <p className="muted small">
+                    معرّف المستخدم: {application.user_id}
+                  </p>
+                  <p className="muted small">
+                    تاريخ الطلب:{' '}
+                    {application.created_at
+                      ? new Date(application.created_at).toLocaleString()
+                      : 'غير متوفر'}
+                  </p>
+
+                  {application.status === 'pending' && (
+                    <div className="actions">
+                      <button
+                        className="btn"
+                        disabled={busy}
+                        onClick={() =>
+                          reviewApplication(application.id, true)
+                        }
+                      >
+                        الموافقة على المتجر
+                      </button>
+                      <button
+                        className="btn danger"
+                        disabled={busy}
+                        onClick={() =>
+                          reviewApplication(application.id, false)
+                        }
+                      >
+                        رفض الطلب
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+
+            <hr style={{ borderColor: '#2a3950', margin: '25px 0' }} />
+
+            <div className="topline">
+              <h3>إضافة منتج أو تعديله</h3>
+              {editingProductId && (
+                <button className="btn secondary" onClick={startNewProduct}>
+                  إلغاء التعديل
+                </button>
+              )}
+            </div>
+
+            <form onSubmit={saveProduct}>
+              <div className="row2">
+                <div className="field">
+                  <label>اسم المنتج</label>
+                  <input
+                    value={productForm.name}
+                    onChange={(event) =>
+                      setProductForm({
+                        ...productForm,
+                        name: event.target.value,
+                      })
+                    }
+                    required
+                  />
+                </div>
+
+                <div className="field">
+                  <label>السعر بالدولار</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={productForm.price_usd}
+                    onChange={(event) =>
+                      setProductForm({
+                        ...productForm,
+                        price_usd: event.target.value,
+                      })
+                    }
+                    required
+                  />
+                </div>
+
+                <div className="field">
+                  <label>الكمية المتوفرة</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={productForm.stock}
+                    onChange={(event) =>
+                      setProductForm({
+                        ...productForm,
+                        stock: event.target.value,
+                      })
+                    }
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="field">
+                <label>رابط صورة المنتج</label>
+                <input
+                  type="url"
+                  value={productForm.image_url}
+                  onChange={(event) =>
+                    setProductForm({
+                      ...productForm,
+                      image_url: event.target.value,
+                    })
+                  }
+                  placeholder="https://..."
+                />
+              </div>
+
+              <div className="field">
+                <label>وصف المنتج</label>
+                <textarea
+                  value={productForm.description}
+                  onChange={(event) =>
+                    setProductForm({
+                      ...productForm,
+                      description: event.target.value,
+                    })
+                  }
+                />
+              </div>
+
+              <div className="field">
+                <label>تعليمات الاستخدام</label>
+                <textarea
+                  value={productForm.usage_instructions}
+                  onChange={(event) =>
+                    setProductForm({
+                      ...productForm,
+                      usage_instructions: event.target.value,
+                    })
+                  }
+                />
+              </div>
+
+              <button className="btn" type="submit" disabled={busy}>
+                {busy
+                  ? 'جارٍ الحفظ...'
+                  : editingProductId
+                  ? 'حفظ تعديلات المنتج'
+                  : 'إضافة المنتج'}
+              </button>
+            </form>
+
+            <h3 style={{ marginTop: 30 }}>
+              جميع المنتجات ({adminProducts.length})
+            </h3>
+
+            {adminProducts.map((product) => (
+              <div className="application" key={product.id}>
+                <div className="topline">
+                  <strong>{product.name}</strong>
+                  <span className="status">
+                    {product.is_active ? 'منشور' : 'مخفي'}
+                  </span>
+                </div>
+                <p className="muted">
+                  {money(product.price_usd)} · المخزون: {product.stock}
+                </p>
+                <div className="actions">
+                  <button
+                    className="btn secondary"
+                    onClick={() => startEditProduct(product)}
+                  >
+                    تعديل
+                  </button>
+                  <button
+                    className="btn secondary"
+                    disabled={busy}
+                    onClick={() => toggleProduct(product)}
+                  >
+                    {product.is_active ? 'إخفاء المنتج' : 'نشر المنتج'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </section>
+        )}
       </main>
 
       <footer className="footer">
-        <a className="brand footer-brand" href="#home"><span className="brand-mark">N</span><span><strong>NEXORA</strong><small>MARKETPLACE</small></span></a>
-        <p>سوق إلكتروني قيد التجهيز — الأسعار بالدولار الأمريكي.</p>
-        <span>© {new Date().getFullYear()} NEXORA</span>
+        <div className="wrap">NEXORA © {new Date().getFullYear()}</div>
       </footer>
-
-      {notice && <div className="notice" role="status"><span>{notice}</span><button onClick={() => setNotice('')} aria-label="إغلاق"><X size={18} /></button></div>}
-
-      {detailProduct && (() => {
-        const images = productImages(detailProduct);
-        const rating = ratings[detailProduct.id];
-        return (
-          <div className="modal-backdrop" onClick={() => setDetailProduct(null)}>
-            <section className="auth-modal" style={{ width: 'min(680px, 96vw)', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
-              <button className="modal-close" onClick={() => setDetailProduct(null)} aria-label="إغلاق"><X size={21} /></button>
-              <h2>{detailProduct.name}</h2>
-              <div style={{ position: 'relative', textAlign: 'center' }}>
-                {images.length ? <img src={images[detailImageIndex]} alt={detailProduct.name} style={{ width: '100%', maxHeight: 320, objectFit: 'contain', background: '#f1f4f8', borderRadius: 12 }} /> : <div style={{ padding: 50, background: '#f1f4f8', borderRadius: 12 }}><Package size={50} /></div>}
-                {images.length > 1 && <>
-                  <button style={{ ...adminButtonStyle, position: 'absolute', right: 8, top: '45%' }} onClick={() => setDetailImageIndex((detailImageIndex + images.length - 1) % images.length)}><ChevronRight /></button>
-                  <button style={{ ...adminButtonStyle, position: 'absolute', left: 8, top: '45%' }} onClick={() => setDetailImageIndex((detailImageIndex + 1) % images.length)}><ChevronLeft /></button>
-                  <p>{detailImageIndex + 1} / {images.length}</p>
-                </>}
-              </div>
-              <h3>${Number(detailProduct.price_usd).toFixed(2)}</h3>
-              <p>{detailProduct.description || 'لا يوجد وصف إضافي.'}</p>
-              <h3>طريقة الاستخدام</h3>
-              <p>{detailProduct.usage_instructions || 'لا توجد تعليمات استخدام مضافة لهذا المنتج.'}</p>
-              <p>المخزون المتاح: {detailProduct.stock}</p>
-              <div style={{ margin: '12px 0' }}>
-                <strong>قيّم المنتج (محلي على هذا الجهاز):</strong>
-                <div style={{ display: 'flex', gap: 5, marginTop: 8 }}>
-                  {[1, 2, 3, 4, 5].map((star) => <button key={star} aria-label={`${star} نجوم`} style={{ ...adminButtonStyle, color: star <= (myRatings[detailProduct.id] || 0) ? '#b7791f' : '#647084', padding: 7 }} onClick={() => rateProduct(detailProduct.id, star)}><Star fill={star <= (myRatings[detailProduct.id] || 0) ? 'currentColor' : 'none'} /></button>)}
-                </div>
-                <small>{rating?.count ? `متوسط التقييم المحلي: ${(rating.total / rating.count).toFixed(1)} من 5` : 'لا توجد تقييمات بعد.'}</small>
-              </div>
-              <button className="primary-button" onClick={() => addToCart(detailProduct)} disabled={detailProduct.stock <= 0}><ShoppingCart size={18} /> {detailProduct.stock > 0 ? 'إضافة إلى السلة' : 'غير متوفر'}</button>
-            </section>
-          </div>
-        );
-      })()}
-
-      {cartOpen && <div className="modal-backdrop" onClick={() => setCartOpen(false)}>
-        <section className="auth-modal" style={{ width: 'min(620px, 96vw)', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
-          <button className="modal-close" onClick={() => setCartOpen(false)} aria-label="إغلاق"><X size={21} /></button>
-          <h2><ShoppingCart size={22} /> سلة المشتريات</h2>
-          {!cart.length ? <p>السلة فارغة حالياً.</p> : <>
-            {cart.map((item) => <div key={item.id} style={{ display: 'flex', gap: 10, alignItems: 'center', borderBottom: '1px solid #e1e6ee', padding: '12px 0' }}>
-              {productImages(item)[0] && <img src={productImages(item)[0]} alt="" style={{ width: 65, height: 65, objectFit: 'contain', borderRadius: 8 }} />}
-              <div style={{ flex: 1 }}><strong>{item.name}</strong><p>${Number(item.price_usd).toFixed(2)} لكل قطعة</p>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <button style={adminButtonStyle} onClick={() => changeQuantity(item.id, -1)}><Minus size={15} /></button>
-                  <span>{item.quantity}</span>
-                  <button style={adminButtonStyle} onClick={() => changeQuantity(item.id, 1)}><Plus size={15} /></button>
-                  <button style={{ ...adminButtonStyle, color: '#b42318' }} onClick={() => setCart((old) => old.filter((p) => p.id !== item.id))}><Trash size={15} /></button>
-                </div>
-              </div>
-              <strong>${(item.price_usd * item.quantity).toFixed(2)}</strong>
-            </div>)}
-            <h3>الإجمالي: ${cartTotal.toFixed(2)}</h3>
-            <p style={{ color: '#9a4b15' }}>الدفع وإرسال الطلبات غير مفعّلين بعد. لا تحوّل أي أموال من خلال هذه الصفحة.</p>
-            <button className="primary-button" onClick={() => setNotice('السلة جاهزة للمراجعة، لكن إنشاء الطلب والدفع غير متاحين بعد.')}>مراجعة السلة فقط</button>
-          </>}
-        </section>
-      </div>}
-
-      {authOpen && <div className="modal-backdrop" onClick={() => setAuthOpen(false)}>
-        <section className="auth-modal" onClick={(e) => e.stopPropagation()}>
-          <button className="modal-close" onClick={() => setAuthOpen(false)} aria-label="إغلاق"><X size={21} /></button>
-          <div className="auth-logo">{authMode === 'forgot' || authMode === 'recovery' ? <KeyRound size={28} /> : <UserRound size={28} />}</div>
-          <h2>{authMode === 'login' ? 'أهلًا بعودتك' : authMode === 'register' ? 'إنشاء حساب جديد' : authMode === 'forgot' ? 'استعادة كلمة المرور' : 'تعيين كلمة مرور جديدة'}</h2>
-          <p>حسابك على NEXORA Marketplace</p>
-          <form onSubmit={handleAuth}>
-            {authMode === 'register' && <label>الاسم الكامل<input value={fullName} onChange={(e) => setFullName(e.target.value)} required autoComplete="name" /></label>}
-            {authMode !== 'recovery' && <label>البريد الإلكتروني<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" /></label>}
-            {authMode === 'register' && <label>رقم الهاتف (اختياري)<input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} autoComplete="tel" placeholder="+963..." /></label>}
-            {authMode !== 'forgot' && <label>{authMode === 'recovery' ? 'كلمة المرور الجديدة' : 'كلمة المرور'}<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} /></label>}
-            <button className="primary-button auth-submit" type="submit" disabled={busy}>{busy ? 'يرجى الانتظار...' : authMode === 'login' ? 'تسجيل الدخول' : authMode === 'register' ? 'إنشاء الحساب' : authMode === 'forgot' ? 'إرسال رابط الاستعادة' : 'حفظ كلمة المرور الجديدة'}</button>
-          </form>
-          {authMode === 'login' && <button className="auth-switch" onClick={() => setAuthMode('forgot')}>نسيت كلمة المرور؟</button>}
-          {authMode === 'forgot' && <button className="auth-switch" onClick={() => setAuthMode('login')}>العودة إلى تسجيل الدخول</button>}
-          {authMode === 'recovery' && <p>اختر كلمة مرور جديدة لا تقل عن 6 أحرف.</p>}
-          {(authMode === 'login' || authMode === 'register') && <button className="auth-switch" onClick={() => { setPassword(''); setAuthMode(authMode === 'login' ? 'register' : 'login'); setNotice(''); }}>{authMode === 'login' ? <>ليس لديك حساب؟ <strong><UserPlus size={15} /> إنشاء حساب</strong></> : <>لديك حساب؟ <strong>تسجيل الدخول</strong></>}</button>}
-        </section>
-      </div>}
     </div>
   );
 }

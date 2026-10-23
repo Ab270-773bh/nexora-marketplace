@@ -11,8 +11,35 @@
     />
     <title>NEXORA Marketplace</title>
   </head>
-  <body>
+  <body style="margin:0;background:#0b1020;color:white;font-family:Arial">
     <div id="root"></div>
+
+    <script>
+      function showError(message) {
+        const root = document.getElementById('root');
+        if (!root) return;
+
+        root.innerHTML = '';
+        const box = document.createElement('div');
+        box.style.cssText = 'padding:24px;direction:rtl;overflow-wrap:anywhere';
+        const title = document.createElement('h2');
+        title.textContent = 'تعذّر تشغيل المتجر';
+        const details = document.createElement('pre');
+        details.style.whiteSpace = 'pre-wrap';
+        details.textContent = String(message || 'خطأ غير معروف');
+        box.append(title, details);
+        root.appendChild(box);
+      }
+
+      window.addEventListener('error', function (event) {
+        showError(event.message || event.error || 'خطأ أثناء تحميل الملفات');
+      });
+
+      window.addEventListener('unhandledrejection', function (event) {
+        showError(event.reason?.message || event.reason || 'خطأ أثناء تشغيل المتجر');
+      });
+    </script>
+
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

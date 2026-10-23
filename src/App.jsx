@@ -1,4 +1,4 @@
-here
+
 import { useEffect, useState } from 'react';
 import {
   Search, ShoppingBag, Store, Truck, Headphones,
